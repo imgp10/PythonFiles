@@ -1,3 +1,4 @@
+'''
 #1 Length of a string
 
 def strsize(a):
@@ -65,4 +66,49 @@ def text1(a,b):
 
 
 
-            
+#6
+# Write a Python program to add 'ing' at the end of a given string (length should be at least 3)
+# If the given string already ends with 'ing', then add 'ly' at the end.
+# If the string length of the given string is less than 3, leave it unchanged
+
+def ingly(inp):
+    if inp[-3:] == 'ing':
+        print("%s%s%s"%(inp, 'l', 'y'))
+
+    elif len(inp) >= 3:
+            print("%s%s%s%s" % (inp, 'i', 'n', 'g'))
+
+    elif len(inp) < 3:
+        print(inp)
+
+
+
+#8 Python function that takes a list of words and returns the length of the longest one
+
+l = ['Athens', 'Rome', 'Johannesburg', 'Zurich']
+
+def maximum(a):
+    e = {}
+    for i in range(len(a)):
+        if a[i] not in e:
+            e.update({a[i]:len(a[i])})
+
+    return max(e.values())
+
+
+
+print(maximum(l))
+'''
+
+#10 Exchanging first and last character of a word
+
+def exchange(v):
+    z = list(v)
+    z[0] = v[-1]
+    z[-1] = v[0]
+    for i in z:
+        print(i, end = "")
+    
+    
+
+
