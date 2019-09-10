@@ -1,0 +1,747 @@
+---
+title: "hOME CREDIT"
+author: "Group 4"
+date: "31 January 2019"
+output: html_document
+---
+
+
+## 1. LOADING REQUIRED LIBRARIES
+
+```{r first}
+
+## Loading libraries
+library(ff)
+library(ffbase)
+library(tidyverse)
+library(missForest)
+library(Boruta)
+library(doParallel) 
+library(ROCR)
+library(caret)
+library(rpart)
+library(randomForest)
+library(missForest)
+library(xgboost)
+library(MASS)
+
+```
+
+
+## 2A. JOINING (INNER) TRAIN DATA WITH OTHER FILES
+
+
+``` {r second, eval = FALSE, echo = FALSE}
+
+## Inner Join of Bureau files
+bureau <- read.csv.ffdf(file = "C:/Users/pc/Desktop/Home Credit/bureau.csv", header=T, sep=",", VERBOSE=T, next.rows=500000, colClasses=NA)
+bb <- read.csv.ffdf(file = "C:/Users/pc/Desktop/Home Credit/bureau_balance.csv", header=T, sep=",", VERBOSE=T, next.rows=500000, colClasses=NA)
+bjoin <- merge(bureau, bb, by.x = "SK_ID_BUREAU", by.y = "SK_ID_BUREAU", all.x = F, all.y = F)
+
+## Inner join of prev app, pos, credit card balance & installment payments
+pa <- read.csv.ffdf(file = "C:/Users/pc/Desktop/Home Credit/previous_application.csv", header=T, sep=",", VERBOSE=T, next.rows=500000, colClasses=NA)
+pos <- read.csv.ffdf(file = "C:/Users/pc/Desktop/Home Credit/POS_CASH_balance.csv", header=T, sep=",", VERBOSE=T, next.rows=500000, colClasses=NA)
+ccb <- read.csv.ffdf(file = "C:/Users/pc/Desktop/Home Credit/credit_card_balance.csv", header=T, sep=",", VERBOSE=T, next.rows=500000, colClasses=NA)
+ip <- read.csv.ffdf(file = "C:/Users/pc/Desktop/Home Credit/installments_payments.csv", header=T, sep=",", VERBOSE=T, next.rows=500000, colClasses=NA)
+
+j1 <- merge(ip, ccb, by.x = "SK_ID_PREV", by.y = "SK_ID_PREV", all.x = F, all.y = F)
+j2 <- merge(pa, j1, by.x = "SK_ID_PREV", by.y = "SK_ID_PREV", all.x = F, all.y = F)
+j3 <- merge(j2, pos, by.x = "SK_ID_CURR", by.y = "SK_ID_CURR", all.x = F, all.y = F)
+
+train1 <- read.csv.ffdf(file = "C:/Users/pc/Desktop/Home Credit/application_train.csv", header=T, sep=",", VERBOSE=T, next.rows=500000, colClasses=NA)
+
+## Inner join of Train & Bureau files
+tb <- merge(train1, bjoin, by.x = "SK_ID_CURR", by.y = "SK_ID_CURR", all.x = F, all.y = F)
+
+## Final inner join
+super <- merge(tb, j3, by.x = "SK_ID_CURR", by.y = "SK_ID_CURR", all.x = F, all.y = F)
+
+
+```
+
+
+
+
+
+## 2B. JOINING (INNER) TEST DATA WITH OTHER FILES
+
+
+``` {r third, eval = FALSE, echo = FALSE}
+
+## Inner Join of Bureau files
+bureau <- read.csv.ffdf(file = "C:/Users/pc/Desktop/Home Credit/bureau.csv", header=T, sep=",", VERBOSE=T, next.rows=500000, colClasses=NA)
+bb <- read.csv.ffdf(file = "C:/Users/pc/Desktop/Home Credit/bureau_balance.csv", header=T, sep=",", VERBOSE=T, next.rows=500000, colClasses=NA)
+bjoin <- merge.ffdf(bureau, bb, by.x = "SK_ID_BUREAU", by.y = "SK_ID_BUREAU", all.x = F, all.y = F, sort = F)
+
+## Inner join of prev app, pos, credit card balance & installment payments
+pa <- read.csv.ffdf(file = "C:/Users/pc/Desktop/Home Credit/previous_application.csv", header=T, sep=",", VERBOSE=T, next.rows=500000, colClasses=NA)
+pos <- read.csv.ffdf(file = "C:/Users/pc/Desktop/Home Credit/POS_CASH_balance.csv", header=T, sep=",", VERBOSE=T, next.rows=500000, colClasses=NA)
+ccb <- read.csv.ffdf(file = "C:/Users/pc/Desktop/Home Credit/credit_card_balance.csv", header=T, sep=",", VERBOSE=T, next.rows=500000, colClasses=NA)
+ip <- read.csv.ffdf(file = "C:/Users/pc/Desktop/Home Credit/installments_payments.csv", header=T, sep=",", VERBOSE=T, next.rows=500000, colClasses=NA)
+
+j1 <- merge.ffdf(ip, ccb, by.x = "SK_ID_PREV", by.y = "SK_ID_PREV", all.x = F, all.y = F)
+j2 <- merge.ffdf(pa, j1, by.x = "SK_ID_PREV", by.y = "SK_ID_PREV", all.x = F, all.y = F)
+j3 <- merge.ffdf(j2, pos, by.x = "SK_ID_CURR", by.y = "SK_ID_CURR", all.x = F, all.y = F)
+
+test <- read.csv.ffdf(file = "C:/Users/pc/Desktop/Home Credit/application_test.csv", header=T, sep=",", VERBOSE=T, next.rows=500000, colClasses=NA)
+
+## Inner join of Test & Bureau files
+tb <- merge(test, bjoin, by.x = "SK_ID_CURR", by.y = "SK_ID_CURR", all.x = F, all.y = F)
+
+## Final inner join
+super_test <- merge(tb, j3, by.x = "SK_ID_CURR", by.y = "SK_ID_CURR", all.x = F, all.y = F)
+
+
+
+```
+
+
+## 3. COMBINING TRAIN and TEST DATASETS & CONVERTING CHARACTER INTO FACTOR
+
+
+```{r fourth setup}
+
+
+## Loading inner-joined Train & Test datasets
+super <- readRDS("superfile1.rds")
+test <- readRDS("test.rds")
+
+## Removing the TARGET variable from training set
+trn <- super[,-2]
+
+## Combining train & test sets
+hc <- rbind(trn, test)
+
+## Count of variables of each class
+map_df(hc, class) %>%
+gather() %>%
+count(value)
+
+
+## Checking for character variables 
+chr <- hc %>%
+       map_df(is.character) %>% 
+       gather() %>%
+       filter(value == TRUE) %>%
+       pull(key)
+
+## Coercing categorical variables into type factor
+hc[,chr] <- map_df(hc[,chr], as.factor)
+
+## Updated count of variables of each class
+map_df(hc, class) %>%
+gather() %>%
+count(value)
+
+
+## Count of missing values in each column
+map_df(hc, function(x) sum(is.na(x))) %>% gather() %>% arrange(desc(value))
+
+
+
+```
+
+
+## 4. IMPUTING MISSING VALUES
+
+
+#### missForest is an implementation of random forest algorithm. It's a non-parametric imputation method applicable to various variable types.
+
+#### How does it work ? In simple words, it builds a random forest model for each variable. Then it uses the model to predict missing values in the variable with the help of observed values. It yields an OOB (out of bag) imputation error estimate. The following two type of OOB errors are estimated:
+
+#### 1. NRMSE is normalized mean squared error. It is used to represent error derived from imputing continuous values. 
+#### 2. PFC (proportion of falsely classified) is used to represent error derived from imputing categorical values.
+
+#### Only NRMSE was calculated here since the data.matrix() function coerced all the variables in the dataset into type
+
+
+#### BONFERRONI METHOD is used in this algorithm. It is used for controlling the simultaneous confidence level for an entire set of confidence intervals. It is important to consider the simultaneous confidence level when you examine multiple confidence intervals because your chances that at least one of the confidence intervals does not contain the population parameter is greater for a set of intervals than for any single interval. To counter this higher error rate, the Bonferroni method adjusts the confidence level for each individual interval so that the resulting simultaneous confidence level is equal to the value you specify.
+
+
+```{r fifth}
+
+## Imputing missing values
+library(doParallel)
+registerDoParallel(cores = 6)
+set.seed(123)
+imp_hc <-  missForest(xmis = data.matrix(hc), maxiter = 5, ntree = 50, mtry = 8, parallelize = "variables")
+
+
+## check imputation error
+err <- imp_hc$OOBerror
+err
+
+## Storing imputed values
+super_imp <- data.frame(imp_hc$ximp)
+
+
+## Since the imputed dataset is in matrix form, all of them became numeric
+## So we will convert all the variables back to their original class
+## Extracting numeric, integer & factor columns from hc
+super_num <- map_df(select_if(hc, is.numeric), class) %>% gather %>% pull(key)
+super_int <- map_df(select_if(hc, is.integer), class) %>% gather %>% pull(key)
+super_fct <- map_df(select_if(hc, is.factor), class) %>% gather %>% pull(key)
+
+
+## Coercing the variables of the imputed data frame into their original class
+super_imp[,super_num] <- map_df(super_imp[,super_num], as.numeric)
+super_imp[,super_fct] <- map_df(super_imp[,super_fct], as.factor)
+super_imp[,super_int] <- map_df(super_imp[,super_int], as.integer)
+
+
+map_df(super_imp, function(x) sum(is.na(x))) %>% gather() %>% arrange(desc(value))
+
+## Count of variables of each class
+map_df(super_imp, class) %>%
+gather() %>%
+count(value)
+
+
+```
+
+
+
+## 5. COERCING INTEGER VARIABLES WITH DISTINCT VALUES < 20 INTO FACTOR & SEPARATING TRAIN and TEST SETS
+
+
+```{r SIXTH}
+
+## Checking for INTEGER columns with < 20 unique values
+num_distinct <- super_imp %>%
+    select_if(is.numeric) %>% 
+    map_df(n_distinct) %>%
+    gather() %>%
+    arrange(desc(value)) %>%
+    filter(value < 20) %>%
+  pull(key)
+
+num_distinct
+
+## Converting integer columns with distinct values < 20 into type factor
+super_imp[,num_distinct] <- map_df(super_imp[,num_distinct], as.factor)
+
+
+
+## SEPARATING TRAIN and TEST SETS
+hc_train <- super_imp[1:27952,]
+hc_test <- super_imp[27953:35784,]
+
+
+## Adding the TARGET variable to training set
+hc_train$TARGET <- super$TARGET
+dim(hc_train)
+
+
+
+## Count of variables of each class
+map_df(hc_train, class) %>%
+gather() %>%
+count(value)
+
+
+```
+
+
+
+
+
+
+## 6. FEATURE SELECTION
+
+
+
+
+#### The Boruta algorithm is a wrapper built around the random forest classification algorithm. It tries to capture all the important, interesting features you might have in your dataset with respect to an outcome variable.
+
+##### 1. First, it duplicates the dataset, and shuffle the values in each column. These values are called shadow features. Then, it trains a classifier, such as a Random Forest Classifier, on the dataset. 
+
+##### 2. At every iteration, the algorithm compares the Z-scores of the shuffled copies of the features and the original features to see if the latter performed better than the former. If it does, the algorithm will mark the feature as important.
+
+
+
+``` {r seventh}
+
+## Checking for important features/predictors using Boruta
+set.seed(123)
+boruta_output <- Boruta(TARGET ~ ., data = hc_train, doTrace = 2, maxRuns = 100)
+
+## Confirming Predictors that are Important, Unimportant & Tentative
+boruta_output
+
+## Deciding which predictors to choose from the tentative ones besides the important ones
+final_decision <- TentativeRoughFix(boruta_output)
+
+attStats(boruta_output)
+
+## Extracting names of confirmed predictors
+finaldecison <- as.data.frame(final_decision$finalDecision)
+finaldecison1 <- as.data.frame(boruta_output$finalDecision)
+names(finaldecison) <- c("status")
+names(finaldecison1) <- c("status")
+
+fd <- data.frame(names(hc_train)[1:211], finaldecison1$status) %>% filter(finaldecison1.status == "Confirmed") %>% pull(names.hc_train..1.211.) %>% as.character()
+
+fd
+
+## Creating a training set comprising the predictors confirmed by Boruta algorithm
+boruta_test <- hc_test[,fd]
+boruta_train <- hc_train[,fd]
+boruta_train$TARGET <- hc_train$TARGET
+
+## Result table
+## normHits tells how many % of times an attribute outperformed its corresponding shadow features  
+attStats(boruta_output)
+
+```
+
+
+## 7. NARROWING DOWN ON THE NO. OF PREDICTORS
+
+
+#### The algorithm has suggested to use 132 predictors to predict the risk of default !!!!
+
+#### However, we will narrow it down to a lower number. We will do so by checking correlation between the 110 numeric predictors and using our own domain knowledge to pick predictors that could be useful to predict the output, ie, TARGET.
+#### After doing the above steps, we have come up with the final set of predictors that will be used in modelling to predict the response.
+
+
+
+```{r}
+
+
+cor_matrix <- select_if(boruta_test, is.numeric) %>% cor()
+cor_matrix
+                    
+
+
+```
+
+
+
+## 7B. FURTHER REDUCING THE NO. OF PREDICTORS DOWN FROM 64 TO 29
+
+
+``` {r}
+
+## Alternative TRAIN & TEST sets
+## This dataset was used for modelling
+tr2 <- hc_train[,c("TARGET", "AMT_INCOME_TOTAL", "DAYS_BIRTH",  "DAYS_EMPLOYED", "EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3", "DAYS_CREDIT_ENDDATE", "AMT_CREDIT_MAX_OVERDUE", "AMT_CREDIT_SUM_DEBT", "CNT_INSTALMENT_FUTURE", "AMT_PAYMENT_CURRENT", "AMT_PAYMENT", "AMT_TOTAL_RECEIVABLE", "AMT_DRAWINGS_CURRENT", "AMT_DRAWINGS_OTHER_CURRENT", "CNT_DRAWINGS_CURRENT", "CNT_INSTALMENT_MATURE_CUM", "NAME_INCOME_TYPE", "ORGANIZATION_TYPE", "OCCUPATION_TYPE", "CREDIT_ACTIVE", "NAME_CLIENT_TYPE", "FLAG_DOCUMENT_6", "REG_CITY_NOT_LIVE_CITY", "REG_CITY_NOT_WORK_CITY", "LIVE_CITY_NOT_WORK_CITY", "NAME_YIELD_GROUP", "PRODUCT_COMBINATION", "NAME_CASH_LOAN_PURPOSE")]
+
+ 
+
+te2 <- hc_test[,c("AMT_INCOME_TOTAL", "DAYS_BIRTH",  "DAYS_EMPLOYED", "EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3","DAYS_CREDIT_ENDDATE", "AMT_CREDIT_MAX_OVERDUE", "AMT_CREDIT_SUM_DEBT", "CNT_INSTALMENT_FUTURE", "AMT_PAYMENT_CURRENT", "AMT_PAYMENT", "AMT_TOTAL_RECEIVABLE", "AMT_DRAWINGS_CURRENT", "AMT_DRAWINGS_OTHER_CURRENT", "CNT_DRAWINGS_CURRENT", "CNT_INSTALMENT_MATURE_CUM", "NAME_INCOME_TYPE", "ORGANIZATION_TYPE", "OCCUPATION_TYPE", "CREDIT_ACTIVE", "NAME_CLIENT_TYPE", "FLAG_DOCUMENT_6", "REG_CITY_NOT_LIVE_CITY", "REG_CITY_NOT_WORK_CITY", "LIVE_CITY_NOT_WORK_CITY", "NAME_YIELD_GROUP", "PRODUCT_COMBINATION", "NAME_CASH_LOAN_PURPOSE")]
+
+
+map_df(te2, class) %>%
+gather() %>%
+count(value)
+
+
+```
+
+
+
+## 8. MODELLING
+
+
+
+
+## 8A. XGBOOST
+
+```{r}
+
+## Train & Test sets
+xgb_train <- tr2
+xgb_test <- te2
+
+
+## Carrying out Hyperparameter Tuning
+library(caret)
+xgb_model <- train(x = data.matrix(xgb_train[,-1]), y = as.factor(xgb_train$TARGET), method='xgbTree', trControl = trainControl(method = "repeatedcv", number = 8))
+xgb_model
+
+
+## Running XGBoost on training data
+xgb <- xgboost(data = data.matrix(xgb_train[,-1]), label = xgb_train$TARGET, nrounds = 50, objective = "multi:softprob", max_depth = 1, eta = 0.4, gamma = 0, colsample_bytree = 0.8, min_child_weight = 1, subsample = 0.75, num_class = 2)
+
+
+## Predictions on the training set
+pred_xgb <- predict(xgb, data.matrix(xgb_train[,-1]))
+
+## Storing prediction of the positive class (1)
+pred_xgb <- matrix(pred_xgb, nrow = 27952, ncol = 2, byrow = T) %>% data.frame()
+names(pred_xgb) <- c(0, 1)
+probs_xgb <- pred_xgb[,2]
+
+
+## ROC Plot
+ROCRpred_xgb <- prediction(probs_xgb, xgb_train$TARGET)
+ROCRperf_xgb <- performance(ROCRpred_xgb, "tpr", "fpr")
+
+plot(ROCRperf_xgb, col="green", lwd=2, main = "ROC Curve for XGBOOST")
+abline(a=0,b=1,lwd=2,lty=2,col="gray")
+text(x = 0.2, y = 0.8, labels = "AUC = 0.7499")
+
+## Area Under the Curve
+aucperf_xgb <- performance(ROCRpred_xgb, "auc")
+aucperf_xgb@y.values[[1]]
+
+## Prediction
+predict(xgb, data.matrix(test_xgb))
+
+```
+
+
+
+
+## 8B. LOGISTIC REGRESSION
+
+
+```{r}
+
+## logistic regression model
+lg <- glm(TARGET~., family = binomial(link=logit), data = tr2)
+
+## Storing prediction
+pred <- predict(lg, type = "response")
+
+
+## ROC Plot
+ROCRpred <- prediction(pred, tr2$TARGET)
+ROCRperf <- performance(ROCRpred, "tpr", "fpr")
+
+plot(ROCRperf, col="green", lwd=2, main = "ROC Curve for Logistic")
+abline(a=0,b=1,lwd=2,lty=2,col="gray")
+text(x = 0.2, y = 0.8, labels = "AUC = 0.7827")
+
+
+## Area Under the Curve
+aucperf <- performance(ROCRpred, "auc")
+aucperf@y.values[[1]]
+
+
+## Prediction on Test set
+lg$xlevels$PRODUCT_COMBINATION <- union(lg$xlevels$PRODUCT_COMBINATION, levels(test1$PRODUCT_COMBINATION))
+lg$xlevels$OCCUPATION_TYPE <- union(lg$xlevels$OCCUPATION_TYPE, levels(test1$OCCUPATION_TYPE))
+lg$xlevels$NAME_YIELD_GROUP <- union(lg$xlevels$NAME_YIELD_GROUP, levels(test1$NAME_YIELD_GROUP))
+lg$xlevels$NAME_PORTFOLIO <- union(lg$xlevels$NAME_PORTFOLIO, levels(test1$NAME_PORTFOLIO))
+pred_test <- predict(lg, te2, type = "response")
+
+
+
+```
+
+
+
+
+## 8C. DECISION TREE (CART)
+
+
+
+```{r}
+
+set.seed(111)
+tree <- rpart(TARGET ~ ., tr2, method = "class")
+
+all_probs <- predict(tree, type = "prob")
+probs <- all_probs[,2]
+
+## ROC Plot
+ROCRpred1 <- prediction(probs, tr2$TARGET)
+ROCRperf1 <- performance(ROCRpred1, "tpr", "fpr")
+
+plot(ROCRperf1, col="green", lwd=2, main = "ROC Curve for Decison Tree")
+abline(a=0,b=1,lwd=2,lty=2,col="gray")
+text(x = 0.2, y = 0.8, labels = "AUC = 0.5")
+
+## Area Under the Curve
+aucperf1 <- performance(ROCRpred1, "auc")
+aucperf1@y.values[[1]]
+
+## Prediction
+predict(tree, te2, type = "prob")
+
+```
+
+
+
+
+## 8D. LDA
+
+
+```{r}
+
+## Training & Test data
+lda_train <- tr2
+lda_test <- te2
+
+## Since LDA requires numeric predictors to work with
+## Converting factor variables into type integer
+lda_train[,c(19:30)] <- map_df(lda_train[,c(19:30)], as.numeric)
+
+
+
+## Converting factor variables into type integer
+lda_test[,c(18:29)] <- map_df(lda_test[,c(18:29)], as.numeric)
+
+
+## Running LDA
+ld1 = lda(TARGET ~ ., data = lda_train)
+
+
+## Prediction Probabilities
+pred_lda <- predict(ld1, newdata = lda_train)
+probs_lda <- pred_lda$posterior[,2]
+
+
+## ROC Plot
+ROCRpred_lda <- prediction(probs_lda, lda_train$TARGET)
+ROCRperf_lda <- performance(ROCRpred_lda, "tpr", "fpr")
+
+plot(ROCRperf_lda, col="green", lwd=2, main = "ROC Curve for LDA")
+abline(a=0,b=1,lwd=2,lty=2,col="gray")
+text(x = 0.2, y = 0.8, labels = "AUC = 0.73389")
+
+## Area Under the Curve
+aucperf_lda <- performance(ROCRpred_lda, "auc")
+aucperf_lda@y.values[[1]]
+
+## Prediction on Test set
+ldatest_pred <- predict(ld1, lda_test)
+
+```
+
+
+## 8E. RANDOM FOREST
+
+
+
+
+
+```{r}
+
+## Check for the optimised value the hyperparameter "mtry"
+rf_model <- train(x = data.matrix(tr2[,-1]), y = as.factor(tr2[,1]), method="rf", trControl = trainControl(method = "repeatedcv", number = 8))
+rf_model
+
+
+## Creating a RandomForest model
+rfhc <- randomForest(x = data.matrix(tr2[,-1]), y = as.factor(tr2[,1]), mtry = 2)
+
+## Preddictions
+pred_rf <- predict(rf_model, type="prob")
+
+## Storing predictions for the positive class
+probs_rf <- pred_rf[,2]
+
+
+## ROC Plot
+ROCRpred_rf <- prediction(probs_rf, tr2$TARGET)
+ROCRperf_rf <- performance(ROCRpred_rf, "tpr", "fpr")
+
+plot(ROCRperf_rf, col="green", lwd=2, main = "ROC Curve for Random Forest")
+abline(a=0,b=1,lwd=2,lty=2,col="gray")
+text(x = 0.2, y = 0.8, labels = "AUC = 1")
+
+## Area Under the Curve
+aucperf_rf <- performance(ROCRpred_rf, "auc")
+aucperf_rf@y.values[[1]]
+
+
+## Prediction on test set
+predict(rfhc, data.matrix(te2))
+
+```
+
+
+## PREDICTIONS USING THE ORIGINAL TRAIN & TEST DATASET
+
+
+
+
+```{r}
+## Reading in the original train & test files
+atr <- read.csv("application_train.csv")
+ate <- read.csv("application_test.csv")
+
+## Checking for predictors common in tr2 (train dataset created via inner-join & feature selection) & atr (original train dataset)
+status_tr <- names(tr2) %in% names(atr)
+
+## Extracting names of predictors common in both tr2 & atr
+atr_names <- data.frame(name = names(tr2), status_tr) %>% filter(status_tr == "TRUE") %>% pull(name) %>% as.character()
+atr_names
+
+## Checking for predictors common in te2 (test dataset created via inner-join & feature selection) & ate (original test dataset)
+status_te <- names(te2) %in% names(ate)
+
+## Extracting names of predictors common in both te2 & ate
+ate_names <- data.frame(name = names(te2), status_te) %>% filter(status_te == "TRUE") %>% pull(name) %>% as.character()
+ate_names
+
+
+## Creating a train & test sets contain required predictors
+atr1 <- atr[,atr_names]
+ate1 <- ate[,ate_names]
+
+## Combining the two data sets
+a <- rbind(atr1[,-1], ate1)
+
+## Checking class of each column
+map_df(a, class) %>% gather() 
+
+## Coercing last 4 columns into type factor
+a[,10:13] <- map_df(a[,10:13], as.factor)
+
+## Checking for missing values in "a"
+map_df(a, function(x) sum(is.na(x))) %>% gather() %>% arrange(desc(value))
+
+## Imputing missing values
+registerDoParallel(cores = 6)
+set.seed(333)
+imp_a <-  missForest(xmis = data.matrix(a), maxiter = 7, ntree = 30, mtry = 3, parallelize = "forests")
+
+## Storing the imputed dataset  
+trte <- data.frame(imp_a$ximp)
+
+## Checking for missing values in each column
+map_df(trte, function(x) sum(is.na(x))) %>% gather() %>% arrange(desc(value))
+
+
+## Extracting names of numeric, integer & factor columns 
+a_num <- map_df(select_if(a, is.numeric), class) %>% gather %>% pull(key)
+a_int <- map_df(select_if(a, is.integer), class) %>% gather %>% pull(key)
+a_fct <- map_df(select_if(a, is.factor), class) %>% gather %>% pull(key)
+
+
+
+## Coercing the variables of the imputed data frame into their original class
+trte[,a_num] <- map_df(trte[,a_num], as.numeric)
+trte[,a_fct] <- map_df(trte[,a_fct], as.factor)
+trte[,a_int] <- map_df(trte[,a_int], as.integer)
+
+
+## Count of variables of each class
+map_df(trte, class) %>%
+gather() %>%
+count(value)
+
+
+## Dividing into train & test
+train_final <- trte[1:307511,]
+test_final <- trte[307512:356255,]
+train_final$TARGET <- atr1$TARGET
+
+```
+
+
+## 1. RANDOM FOREST
+
+``` {r}
+## Hyperparameter Tuning using Caret
+rf <- train(x = data.matrix(train_final[,-14]), y = as.factor(train_final[,14]), method="rf", trControl = trainControl(method = "repeatedcv", number = 8))
+rf
+
+
+rf_train <- randomForest(x = data.matrix(train_final[,-14]), y = as.factor(train_final[,14]), mtry = 2)
+
+predictions <- predict(rf_train, data.matrix(test_final), type = "prob")
+
+probabilities <- predictions[,2]
+
+final1 <- data.frame(SK_ID_CURR = ate$SK_ID_CURR, TARGET = predictions[,1])
+```
+
+
+
+##2. XGBOOST
+
+
+```{r}
+
+## Running XGBoost on training data
+xgb1 <- xgboost(data = data.matrix(train_final[,-14]), label = train_final$TARGET, nrounds = 100, objective = "multi:softprob", max_depth = 1, eta = 0.4, gamma = 0, colsample_bytree = 0.8, min_child_weight = 1, subsample = 0.75, num_class = 2)
+
+
+## Predictions on the training set
+finalpred_xgb <- predict(xgb1, data.matrix(test_final))
+
+## Storing prediction of the positive class (1)
+finalpred_xgb <- matrix(finalpred_xgb, nrow = 48744, ncol = 2, byrow = T) %>% data.frame()
+names(finalpred_xgb) <- c(0, 1)
+probs_finalxgb <- finalpred_xgb[,2]
+
+final2 <- data.frame(SK_ID_CURR = ate$SK_ID_CURR, TARGET = probs_finalxgb)
+write.csv(final2, "final2.csv", row.names = F)
+
+```
+
+
+
+##3. DECISION TREE
+
+```{r}
+
+library(rpart)
+tree1 <- rpart(TARGET ~ ., train_final, method = "class")
+all_probs1 <- predict(tree1, test_final, type = "prob")
+probs1 <- all_probs1[,2]
+
+
+dt <- data.frame(SK_ID_CURR = ate$SK_ID_CURR, TARGET = probs1)
+write.csv(dt, "dt.csv", row.names = F)
+
+
+```
+
+
+
+##4. LOGISTIC REGRESSION
+
+```{r}
+
+
+## logistic regression model
+lg1 <- glm(TARGET~., family = binomial(link=logit), data = train_final)
+
+## Storing prediction
+pred_lg1 <- predict(lg1, test_final, type = "response")
+
+lr <- data.frame(SK_ID_CURR = ate$SK_ID_CURR, TARGET = pred_lg1)
+write.csv(lr, "lr.csv", row.names = F)
+
+
+```
+
+
+
+##5. LDA
+
+```{r}
+
+## Training & Test data
+lda_train1 <- train_final
+lda_test1 <- test_final
+
+## Since LDA requires numeric predictors to work with
+## Converting factor variables into type integer
+lda_train1[,c(7:13)] <- map_df(lda_train1[,c(7:13)], as.numeric)
+
+
+
+## Converting factor variables into type integer
+lda_test1[,c(7:13)] <- map_df(lda_test1[,c(7:13)], as.numeric)
+
+
+## Running LDA
+ld2 = lda(TARGET ~ ., data = lda_train1)
+
+
+## Prediction Probabilities
+pred_lda1 <- predict(ld2, newdata = lda_test1)
+probs_lda1 <- pred_lda1$posterior[,2]
+
+lda <- data.frame(SK_ID_CURR = ate$SK_ID_CURR, TARGET = probs_lda1)
+write.csv(lda, "lda.csv", row.names = F)
+
+
+```
+
